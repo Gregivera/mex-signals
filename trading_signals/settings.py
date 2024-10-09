@@ -11,6 +11,8 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
 from pathlib import Path
+import os
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -49,6 +51,16 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+# settings.py
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'mail.privateemail.com'  # or 'mail.namecheap.com'
+EMAIL_PORT = 587  # or 465 for SSL
+EMAIL_USE_TLS = True  # or EMAIL_USE_SSL = True for port 465
+EMAIL_HOST_USER = 'contact@marketexperts.pro'
+EMAIL_HOST_PASSWORD = 'Y73*90_!H9^$$__'
+
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER  # Your email
+
 
 ROOT_URLCONF = 'trading_signals.urls'
 

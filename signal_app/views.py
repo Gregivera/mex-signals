@@ -1,20 +1,27 @@
 import os
-import discord
 from discord.ext import commands
 from discord.ui import Button, View, Modal, InputText
 from disnake import TextInputStyle
+import discord
 from discord.commands import SlashCommandGroup
 from disnake.ui import TextInput
 from django.http import JsonResponse
+from django.utils.html import format_html
 from django.views.decorators.csrf import csrf_exempt
 from .models import UserProfile
 import json
+from django.conf import settings
 import pandas as pd
 import numpy as np
+import random
+import smtplib  # Example for sending email
 import ccxt
+from django.core.mail import send_mail
 import aiohttp
 from asgiref.sync import sync_to_async
 import asyncio
+
+asyncio.set_event_loop(asyncio.new_event_loop())
 
 # Only use commands.Bot since it can do everything discord.bot can do
 intents = discord.Intents.default()
@@ -25,14 +32,14 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # Group for slash commands
 trading_signals_group = SlashCommandGroup("trading", "Commands related to trading signals")
 
-MESSAGE_ID = 1219183295925981265
+MESSAGE_ID = 1285840423268515913
 
 CRYPTO_PAIRS = [
     'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'ADA/USDT',
     'SOL/USDT', 'XRP/USDT', 'DOT/USDT', 'MATIC/USDT',
-    'SNX/USDT', 'XMR/USDT', 'FIL/USDT',
-    'APT/USDT', 'QNT/USDT', 'LTC/USDT', 'UNI/USDT',
-    'TIA/USDT', 'TRX/USDT', 'APE/USDT', 'XLM/USDT'
+    'SNX/USDT', 'FIL/USDT',
+    'APT/USDT', 'LTC/USDT', 'UNI/USDT',
+    'TRX/USDT', 'APE/USDT', 'XLM/USDT'
 ]
 
 # Function to calculate the EMA
@@ -67,17 +74,15 @@ async def calculate_atr(df, period=14):
     atr = tr.rolling(window=period).mean()
     return atr
 
-
 class SignalSelectionView(View):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.add_item(Button(label="Get Started for Free", style=discord.ButtonStyle.green, custom_id="free_signals"))
-        self.add_item(Button(label="👑VIP Signals", style=discord.ButtonStyle.blurple, custom_id="vip_signals"))
+        self.add_item(Button(label="🚨 Get our Exclusive Signals", style=discord.ButtonStyle.blurple, custom_id="vip_signals"))
 
     
 # Function to fetch data and calculate signal
 async def generate_signal(pair):
-    exchange = ccxt.binance()
+    exchange = ccxt.binanceus()
     symbol = pair
     timeframe = '15m'
     limit = 100  # Fetch last 100 candles
@@ -89,27 +94,33 @@ async def generate_signal(pair):
     df['ATR14'] = await calculate_atr(df, 14)
     latest = df.iloc[-1]
     if latest['RSI4'] < 30 and latest['CCI10'] < -100 and latest['close'] < latest['EMA25']:
-        tp = latest['close'] - (2 * latest['ATR14'])
+        tp = latest['close'] - (1.5 * latest['ATR14'])
+        tp1 = latest['close'] - (2 * latest['ATR14'])
         sl = latest['close'] + (2 * latest['ATR14'])
-        tp_formatted = f"{tp:.2f}"
-        sl_formatted = f"{sl:.2f}"
-        return f'↘️ Sell {symbol} at {latest["close"]} \n 🟢 Take profit @{tp_formatted} \n 🔴 Stop loss@{sl_formatted}'
+        tp_formatted = f"{tp:.4f}"
+        tp1_formatted = f"{tp1:.4f}"
+        sl_formatted = f"{sl:.4f}"
+        return f'🎯 **Pair**: {symbol} \n 🔻 **Action**: Sell at **{latest["close"]}** \n \n 💰 **Take Profit Targets**:\n 	•	TP1: **{tp_formatted}**\n 	•	TP2: **{tp1_formatted}** \n \n ❌ **Stop Loss: {sl_formatted}** \n \n ⚡️ **Leverage**: _Optional_ \n 🔗 _Trade responsibly and follow market trends_ \n ~~                                                                                         ~~\n \n \n '
     elif latest['RSI4'] > 70 and latest['CCI10'] > 100 and latest['close'] > latest['EMA25']:
-        tp = latest['close'] + (2 * latest['ATR14'])
+        tp = latest['close'] + (1.5 * latest['ATR14'])
+        tp1 = latest['close'] + (2 * latest['ATR14'])
         sl = latest['close'] - (2 * latest['ATR14'])
-        tp_formatted = f"{tp:.2f}"
-        sl_formatted = f"{sl:.2f}"
-        return f'↗️ Buy {symbol} at {latest["close"]} \n 🟢 Take profit @{tp_formatted} \n 🔴 Stop loss@{sl_formatted}'
+        tp_formatted = f"{tp:.4f}"
+        tp1_formatted = f"{tp1:.4f}"
+        sl_formatted = f"{sl:.4f}"
+        return f'🎯 **Pair**: {symbol} \n 💹 **Action**: Buy at **{latest["close"]}** \n \n 💰 **Take Profit Targets**:\n 	•	TP1: **{tp_formatted}**\n 	•	TP2: **{tp1_formatted}** \n \n ❌ **Stop Loss: {sl_formatted}** \n \n ⚡️ **Leverage**: _Optional_ \n 🔗 _Trade responsibly and follow market trends_ \n ~~                                                                                         ~~ \n \n \n'
     return 'HOLD'
 
 async def send_signal(discord_id, signal):
     user = await bot.fetch_user(int(discord_id))
     if user and signal != 'HOLD':
-        await user.send(f"🚦New trading signal: {signal}")
+        await user.send(f"🌐 **New Trade Signal Alert** 🌐 \n {signal}")
         
 async def register_user_for_signals(discord_user, subscription_type):
     discord_id = str(discord_user.id)
     discord_username = f"{discord_user.name}#{discord_user.discriminator}"
+
+    # await sync_to_async(UserProfile.objects.all().delete, thread_sensitive=True)()
     
     def get_or_create_user_profile():
         user_profile, created = UserProfile.objects.get_or_create(
@@ -147,72 +158,160 @@ async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
     # Check if the message with buttons has already been sent to avoid duplication
     # This is simplified; implement based on your requirement
-    channel = bot.get_channel(1205252965439512596)  # Adjust with your target channel ID
+    channel = bot.get_channel(1280258256782102640)  # Adjust with your target channel ID
     # Ensure this message is only sent once or based on some condition
     await send_or_retrieve_message(channel)
     # Start the periodic signal check task
     bot.loop.create_task(periodic_signal_check())
+
+# Create a dictionary to store generated codes for emails
+async def send_verification_code(email):
+    # Generate a random 6-digit verification code
+    verification_code = str(random.randint(100000, 999999))
     
+    try:
+        print("About Sending Verification Mail")
+        
+        # Subject for the email
+        subject = f'Your Signal Access Verification Code is {verification_code}'
+        
+        # HTML formatted email content
+        message = format_html(
+            f'<strong>Signal Access Verification Code</strong>,<br><br>'
+            f'We’ve received your request to access exclusive trading signals. '
+            f'To complete the process, please use the following verification code:<br><br>'
+            f'<strong style="font-size: 2em;">🛡️ {verification_code} 🛡️</strong><br><br>'
+            f'Please enter this code in the provided field to unlock your access.<br>'
+            f'<em>Note: For your security, do not share this code with anyone.</em><br><br>'
+            f'If you did not request access to signals, you can safely ignore this email.<br><br>'
+            f'Trade safely,<br>'
+            f'The Market Experts Team'
+        )
+        
+        from_email = settings.DEFAULT_FROM_EMAIL
+        to_email = [email]
+
+        # Send the email using the html_message parameter for HTML content
+        send_mail(subject, '', from_email, to_email, html_message=message)
+
+        print(f"Verification code {verification_code} sent to {email}")
+
+        # Return the verification code directly
+        return verification_code, 200
+
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+        return {"message": "Failed to send code", "code": None}, 500
+
+# Async function to verify the code
+async def verify_code(input, email, code):
+    print(f"Verifing code and User says {input} code is {code}")
+    # Check if the entered code matches the stored one
+    if int(input) == int(code):
+        print(f"Code {code} is correct for {email}")
+        return 200
+    else:
+        print(f"Invalid code {code} for {email}")
+        return 404
+    
+# Modal class to collect the user's email
+# Modal class to collect the user's email and verify the code
+class CodeModal(Modal):
+    def __init__(self, email, code, *args, **kwargs):
+        super().__init__(title="Enter 6-Digit Verification Code", *args, **kwargs)
+        
+        # Store the passed email and code
+        self.email = email  # Passed in from the previous modal
+        self.code = code  # Verification code to match
+        
+        # InputText for the user to enter the code
+        self.verification_code = InputText(
+            label="Verification Code", 
+            custom_id="code", 
+            style=TextInputStyle.short, 
+            placeholder="123456", 
+            required=True, 
+            max_length=6  # Ensure it is a 4-digit code
+        )
+        # Add InputText to the modal
+        self.add_item(self.verification_code)
+
+    # Callback method when the modal is submitted
+    async def callback(self, interaction: discord.Interaction):
+        # Get the entered code from the user
+        input_code = self.verification_code.value
+
+        _code = int(self.code)
+
+        print(f"Code entered by user: {input_code}")
+        print(f"Actual code to match: {_code}")
+        
+        # Check if the entered code matches the one that was sent
+        if int(input_code) == int(_code):
+            # If it matches, notify the user of successful verification
+            await interaction.response.send_message("Code verified successfully.", ephemeral=True)  # Ephemeral ensures only the user sees this message
+            await register_user_for_signals(interaction.user, 'VIP')
+        else:
+            # If it doesn't match, notify the user of invalid code
+            await interaction.response.send_message("Invalid code. Please try again.", ephemeral=True)
+
+
+# Modal class to collect the user's email
 class EmailModal(Modal):
     def __init__(self, *args, **kwargs):
-        super().__init__(title="Enter Your Email for VIP Signals", *args, **kwargs)
-        self.email = InputText(label="Email Address", custom_id="user_email" ,style=TextInputStyle.short, placeholder="you@example.com", required=True)
+        super().__init__(title="Enter Your Email for Exclusive Signals", *args, **kwargs)
+        self.email = InputText(label="Email Address", custom_id="user_email", style=TextInputStyle.short, placeholder="you@example.com", required=True)
         self.add_item(self.email)
 
     async def callback(self, interaction: discord.Interaction):
         email = self.email.value
-        print(f"Discord Interaction {discord.Interaction}")
-        response_json, status = await check_email_for_vip(email)
+        print(f"Email received: {email}")
+
+        # Defer the interaction response to allow background processing
+        await interaction.response.defer(ephemeral=True)
+
+        # Send the verification code via email in the background
+        code, status = await send_verification_code(email)
+
+        # Store the email and code in pending_users for later verification
+        pending_users[interaction.user.id] = {
+            'state': 'awaiting_code',
+            'email': email,
+            'code': code
+        }
+        print("Pending Users Set")
 
         if status == 200:
-            print("modal is confirmed and good")
-            await register_user_for_signals(interaction.user, 'VIP')
-            try:
-                # Attempt to send an initial response
-                await interaction.response.send_message("You are now registered for VIP signals!", ephemeral=True)
-            except discord.NotFound as e:
-                # If the interaction is not found (probably expired), log the exception for further investigation
-                print(f"Failed to respond to the interaction: {e}")
-            except discord.InteractionResponded:
-                # If a response has already been made, use a follow-up
-                await interaction.followup.send("You are now registered for VIP signals!", ephemeral=True)
-        
-        elif status == 404:
-            await interaction.response.send_message("Please register and be a Pro member of Coindeck to use this service.", ephemeral=True)
-        elif status == 403:
-            await interaction.response.send_message("You need to be a Pro member of Coindeck to use this service.", ephemeral=True)
+            print("Code has been sent, prompting user to enter it...")
+            # Create a button to trigger the second modal
+            button = Button(label="Enter Verification Code", style=discord.ButtonStyle.success)
+
+            async def button_callback(interaction):
+                await interaction.response.send_modal(CodeModal(email, code))
+
+            button.callback = button_callback
+
+            view = View()
+            view.add_item(button)
+
+            # Send a follow-up message after sending the email
+            await interaction.followup.send("Verification code has been sent to your email. Click the button below to enter the code.", view=view, ephemeral=True)
         else:
-            await interaction.response.send_message("An unexpected error occurred. Please try again later.", ephemeral=True)
+            await interaction.followup.send("Failed to send verification code. Please try again.", ephemeral=True)
 
 
-async def check_email_for_vip(email):
-    print(f"Making request for {email} to Coindeck...")
-    url = 'https://coindeck.app/api/verify_user/'
+# Function to confirm the code
+async def confirming_code(email, code):
+    print(f"Verifying code for {email}...")
+    response_json, status = await verify_code(email, code)
+    
+    if status == 200:
+        return {"message": "Code verified successfully."}, 200
+    elif status == 404:
+        return {"message": "Invalid code. Please try again."}, 404
+    else:
+        return {"message": "An unexpected error occurred. Please try again later."}, 500
 
-    # Prepare the headers and data as if it was being sent by the browsable API form.
-    headers = {
-        'Content-Type': 'application/json',  # Set the content type to application/json
-        # Add any other headers required by your API, like Authorization headers if needed.
-    }
-    payload = json.dumps({'email': email})  # Convert the payload to a JSON string
-
-    async with aiohttp.ClientSession() as session:
-        try:
-            # Send the request with data as raw json body and the headers.
-            async with session.post(url, data=payload, headers=headers) as response:
-                # The rest of your code to handle the response.
-                if response.status == 200:
-                    response_json = await response.json()
-                    print("Response is Good")
-                    return response_json, 200
-                else:
-                    response_text = await response.text()
-                    print(f"Response is not so Good {response.status} {response_text}")
-                    return {"message": response_text}, response.status
-        except aiohttp.ClientError as e:
-            print(f"Client Error: {e}")
-            return {"message": "An error occurred. Please try again later."}, 500
-        
 @bot.event
 async def on_interaction(interaction):
     if interaction.type == discord.InteractionType.component:
@@ -244,7 +343,7 @@ async def on_interaction(interaction):
                 await interaction.response.send_modal(EmailModal())
                 return  # Exit to avoid sending follow-up message prematurely
             else:
-                follow_up_message = "You have already been registered for our Exclusive 👑VIP Signals!"
+                follow_up_message = "👑 You have already been registered for our Exclusive Signals!"
                 
         # Send a follow-up message after processing
         try:
@@ -259,44 +358,6 @@ async def on_interaction(interaction):
         except Exception as e:
             # Catch any other exceptions that might occur
             print(f"An unexpected error occurred: {e}")
-
-
-# @trading_signals_group.command(name="freesignals", description="Register for free trading signals")
-# async def freesignals(ctx: discord.ApplicationContext):
-#     await ctx.defer()  # This tells Discord that the bot is processing the command
-
-#     discord_id = str(ctx.author.id)
-#     # Fetch or create a user profile
-#     user_profile, created = await sync_to_async(UserProfile.objects.get_or_create, thread_sensitive=True)(discord_id=discord_id)
-    
-#     if not created and user_profile.subscription_type == 'FREE':
-#         if user_profile.received_signals_count >= 2:
-#             await ctx.respond("You have exhausted your lifetime free signals. Upgrade to VIP for more exclusive signals.")
-#         else:
-#             await ctx.respond("You're already registered for Free Signals!")
-#     else:
-#         user_profile.subscription_type = 'FREE'
-#         user_profile.received_signals_count = 0
-#         await sync_to_async(user_profile.save, thread_sensitive=True)()
-#         await ctx.respond("You've been registered for Free Signals!")
-
-# @trading_signals_group.command(name="vipsignals", description="Register for VIP trading signals")
-# async def vipsignals(ctx: discord.ApplicationContext):
-#     await ctx.defer()  # This tells Discord that the bot is processing the command
-
-#     discord_id = str(ctx.author.id)
-#     # Fetch or create a user profile
-#     user_profile, created = await sync_to_async(UserProfile.objects.get_or_create, thread_sensitive=True)(discord_id=discord_id)
-    
-#     if not created and user_profile.subscription_type == 'VIP':
-#         await ctx.respond("You're already registered for VIP Signals!")
-#     else:
-#         user_profile.subscription_type = 'VIP'
-#         await sync_to_async(user_profile.save, thread_sensitive=True)()
-#         await ctx.respond("You've been upgraded to VIP Signals!")
-
-# # Add the group to the bot's commands
-# bot.add_application_command(trading_signals_group)
 
 @csrf_exempt
 async def tradingview_signal(request):
@@ -360,44 +421,81 @@ async def notify_to_upgrade(discord_id):
     user = await bot.fetch_user(int(discord_id))
     await user.send("You have exhausted your lifetime free signals, Kindly Upgrade to get unlimited Exclusive singals accross 20 diffrent pairs")
 
-# Assuming you have a function register_user_for_signals(user, type) and check_email_for_vip(email)
-
 pending_emails = {}  # Dictionary to keep track of users who need to input their email
+pending_users = {}
+
+# Event handler for message
+import re
 
 @bot.event
 async def on_message(message):
+    # Ignore messages from the bot itself or messages from servers (public channels)
     if message.author == bot.user or message.guild is not None:
-        return  # Ignore bot's and server messages
+        return
+    
+    user = message.author
 
     user_id = message.author.id
 
-    if '/free' in message.content.lower():
-        await register_user_for_signals(message.author, 'FREE')
-        response_message = f"Welcome {message.author.name}! You have been registered for free signals. Stay tuned for notifications about any Bitcoin trading opportunities."
-        await message.channel.send(response_message)
+    # If the user is sending a DM
+    if isinstance(message.channel, discord.DMChannel):
 
-    elif '/vip' in message.content.lower():
-        pending_emails[user_id] = 'VIP'  # Mark the user as needing to input their email
-        response_message = "Welcome! Please reply with your email to start using VIP signals."
-        await message.channel.send(response_message)
+        # Handle email input (initial state)
+        if user_id in pending_users and pending_users[user_id] == 'awaiting_email':
+            email = message.content.strip()
 
-    elif user_id in pending_emails:
-        email = message.content  # Assume the entire message is the email
-        response_json, status = await check_email_for_vip(email)  # Adjusted to await the API call
-        if status == 200:
-            await register_user_for_signals(message.author, 'VIP')
-            await message.channel.send("You are now registered for VIP signals!")  # Adjusted for message context
-        elif status == 404:
-            await message.channel.send("Please register and become a Pro Member of Coindeck to use this service. Proceed to signup here https://coindeck.app/accounts/signup/")  # Adjusted
-        elif status == 403:
-            await message.channel.send("You need to be a Pro member of Coindeck to use this service. Kindly upgrade your profile Level!")  # Adjusted
+            # Validate email format (simple validation with @ symbol)
+            if "@" in email and re.match(r"[^@]+@[^@]+\.[^@]+", email):
+                code, status = await send_verification_code(email)
+
+                if status == 200:
+                    await message.channel.send("A verification code has been sent to your email. Please reply with the code you received.")
+                    # Store the email and code in pending_users for later verification
+                    pending_users[user_id] = {
+                        'state': 'awaiting_code',
+                        'email': email,
+                        'code': code
+                    }
+                else:
+                    await message.channel.send("Failed to send the verification code. Please try again.")
+            else:
+                await message.channel.send("Invalid email format. Please provide a valid email.")
+
+        # Handle code verification
+        elif user_id in pending_users and pending_users[user_id]['state'] == 'awaiting_code':
+            input_code = message.content.strip()
+
+            if input_code:
+                print("Trying to verify the code")
+                # Retrieve stored email and code
+                email = pending_users[user_id]['email']
+                code = pending_users[user_id]['code']
+
+                _code = int(list(code)[0])
+                print(f"Code sent to user is {_code}")
+                print(f"User Input Code is {input_code}")
+                status = await verify_code(input_code, email, _code)
+
+                if status == 200:
+                    await message.channel.send("Code verified successfully! You're now registered for Exclusive signals.")
+                    await register_user_for_signals(user, 'VIP')
+                    del pending_users[user_id]  # Cleanup after handling
+                else:
+                    await message.channel.send("Incorrect Code! Kindly input the correct code sent to your email.")
+                    del pending_users[user_id]  # Cleanup after handling
+            else:
+                await message.channel.send("No Code Detected. Please start again by providing your email.")
+                pending_users[user_id] = 'awaiting_email'
+
+        # Handle initial greeting and start email collection
+        elif 'hello' in message.content.lower() and user_id not in pending_users:
+            
+            pending_users[user_id] = 'awaiting_email'
+            await message.channel.send("Welcome! Please reply with your email to start using Exclusive signals.")
+
         else:
-            await message.channel.send("An unexpected error occurred. Please try again later.")  # Adjusted
-        del pending_emails[user_id]  # Cleanup after handling
+            await message.channel.send("Please provide a valid email to get started.")
 
 
 token = os.getenv('DISCORD_BOT_TOKEN')
 bot.run(token)
-
-
-
